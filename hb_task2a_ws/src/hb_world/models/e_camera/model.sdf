@@ -41,8 +41,8 @@
             <aspect_ratio>2.0</aspect_ratio>
             
             <image>
-                <width>1000</width>
-							  <height>1000</height>
+                <width>1500</width>
+							  <height>1500</height>
                 <format>R8G8B8</format>
             </image>
             <clip>

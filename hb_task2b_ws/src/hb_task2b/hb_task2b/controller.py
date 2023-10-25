@@ -19,7 +19,7 @@
 
 
 # Team ID:		[ 2865 ]
-# Author List:		[ Names of team members worked on this file separated by Comma: Name1, Name2, ... ]
+# Author List:	[ Shreyas Das ]
 # Filename:		controller.py
 # Functions:
 #			[ Comma separated list of functions in this file ]
@@ -31,11 +31,9 @@
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import Pose, Wrench
-import time
 import math
-from tf_transformations import euler_from_quaternion
 from my_robot_interfaces.msg import Goal  
-import numpy as np           
+import numpy as np     
 
 # You can add more if required
 ##############################################################
@@ -54,12 +52,8 @@ class HBController(Node):
     def __init__(self, name="temp"):
         super().__init__(f'hb_controller_{name}')
         
-        # Initialze Publisher and Subscriber
-        # NOTE: You are strictly NOT-ALLOWED to use "cmd_vel" or "odom" topics in this task
-	    #	Use the below given topics to generate motion for the robot.
-	    #   /hb_bot_1/left_wheel_force,
-	    #   /hb_bot_1/right_wheel_force,
-	    #   /hb_bot_1/rear_wheel_force
+        self.id = name
+
         self.left_wheel = self.create_publisher(Wrench, f"/hb_bot_{name}/left_wheel_force", 10)
         self.right_wheel = self.create_publisher(Wrench, f"/hb_bot_{name}/right_wheel_force", 10)
         self.rear_wheel = self.create_publisher(Wrench, f"/hb_bot_{name}/rear_wheel_force", 10)
@@ -67,17 +61,13 @@ class HBController(Node):
         self.sub = self.create_subscription(Pose, f"/detected_aruco_{name}", self.pose_callback, 10)
         self.goal_sub = self.create_subscription(Goal, f"/hb_bot_{name}/goal", self.goal_callback, 10)
 
-
         self.iter = 0
 
         # For maintaining control loop rate.
         self.rate = self.create_rate(1000)
-        self.timer = self.create_timer(0.02, self.move)
+        self.timer = self.create_timer(0.01, self.move)
 
-
-        # client for the "next_goal" service
-        # self.cli = self.create_client(NextGoal, 'next_goal')      
-        # self.req = NextGoal.Request() 
+        # Index for getting goal
         self.index = 0
 
         # Goal array [x, y, w]
@@ -97,7 +87,7 @@ class HBController(Node):
         # Distance from centroid to wheel, (Measured in blender)
         self.wheel_dist = 0.6
 
-        # Conversion Matrix
+        # Conversion Matrix to transform Bot coords to wheel velocity (wheel velocity is NOT angular velocity)
         self.conv_mtx = np.array([
             [-self.wheel_dist, 1.0, 0],
             [-self.wheel_dist, -0.5, -math.sin(math.pi/3.0)],
@@ -108,10 +98,9 @@ class HBController(Node):
         self.pose = [pose.position.x, pose.position.y, pose.orientation.z]
         self.pose_detected = True
     
+    # Enable controller if pose is detected
     def start_move(self):
-        # self.get_logger().info("MOVING")
-        self.controller_enable = True and self.pose_detected and self.got_goal
-        # print(self.controller_enable)
+        self.controller_enable = True and self.pose_detected
     
     def goal_callback(self, goal):
         self.goal_arrays_x = goal.x
@@ -119,18 +108,15 @@ class HBController(Node):
         self.goal_arrays_w = goal.theta
 
         self.got_goal = True
-    # Method to create a request to the "next_goal" service
-    # def send_request(self, request_goal):
-    #     self.req.request_goal = request_goal
-    #     self.future = self.cli.call_async(self.req)
 
-        
+    # Check if pose, goal is present and the controller is enabled
     def move(self):
         self.iter += 1
-        if (self.controller_enable == False):
+        if (self.controller_enable == False and self.got_goal == False):
             if (self.iter % 1 == 0):
                 self.get_logger().info(f"controller: {self.controller_enable} pose: {self.pose_detected} goal:{self.got_goal}")
                 self.get_logger().info(f"{self.goal_array}")
+                self.iter = 0
             self.stop_move()
             return
         msg = self.inverse_kinematics()
@@ -138,21 +124,33 @@ class HBController(Node):
         self.right_wheel.publish(msg[1])
         self.rear_wheel.publish(msg[2])
 
+
+    # Calc error
     def error_vx(self):
         return float(self.goal_array[0] - self.pose[0])
     
     def error_vy(self):
         return float(self.goal_array[1] - self.pose[1])
     
+
+    # OLD wz error func
+    # def error_wz(self):
+    #     current_angle = math.acos(math.cos(self.pose[2]))
+    #     desired_angle = math.acos(math.cos(self.goal_array[2]))
+
+    #     error = desired_angle - current_angle
+    #     if self.goal_array[2] - self.pose[2] < 0:
+    #         error *= -1
+
+    #     return error * 2
+    
+    # New wz error func
     def error_wz(self):
-        current_angle = math.acos(math.cos(self.pose[2]))
-        desired_angle = math.acos(math.cos(self.goal_array[2]))
-
+        current_angle = math.sin(self.pose[2])
+        desired_angle = math.sin(self.goal_array[2])
         error = desired_angle - current_angle
-        if self.goal_array[2] - self.pose[2] < 0:
-            error *= -1
-
-        return error * 1
+        error *= 3.0
+        return error
 
     def stop_move(self):
         msg = Wrench()
@@ -171,47 +169,41 @@ class HBController(Node):
         return is_true_if
 
 
-    def inverse_kinematics(self, kp = 50):
-        ############ ADD YOUR CODE HERE ############
+    def inverse_kinematics(self, kp = 25):
 
-        # INSTRUCTIONS & HELP : 
-        #	-> Use the target velocity you calculated for the robot in previous task, and
-        #	Process it further to find what proportions of that effort should be given to 3 individuals wheels !!
-        #	Publish the calculated efforts to actuate robot by applying force vectors on provided topics
-        ############################################
-        
-        # Rotation Matrix to transform area coords to bot coords
+        # Rotation Matrix to transform arena coords to bot coords
         rot_matrix = np.array([
             [1,0,0],
             [0, math.cos(self.pose[2]), math.sin(self.pose[2])],
             [0, -math.sin(self.pose[2]), math.cos(self.pose[2])]
         ])
 
-        # Goal Matrix 
+        # Calc Kp controller values
+        wz = self.error_wz() * kp
+        vx = self.error_vx() * kp
+        vy = self.error_vy() * kp
+
+        # Goal Matrix defined in arena coords
         goal_matrix = np.array([
-            [math.pow(self.error_wz(), 1) * kp],
-            [math.pow(self.error_vx(), 1) * kp],
-            [math.pow(self.error_vy(), 1) * kp]
+            [wz],
+            [vx],
+            [vy]
         ])
 
-        # Final Transform
+        # Final Transform: wheel coords <- bot coords <- arena coords
         final_matrix = self.conv_mtx @ rot_matrix @ goal_matrix
 
-        final_matrix = final_matrix  
-
         final_matrix /= self.force_limiter(final_matrix)
-        # Convert Matrix to Wrench
+
+        final_matrix *= self.force_leveler(final_matrix)
 
         # wheel in order of [b, l, r]
-
         msg_l = Wrench()
         msg_r = Wrench()
         msg_b = Wrench()
         msg_l.force.y = final_matrix.flatten()[1]
         msg_r.force.y = final_matrix.flatten()[2]
         msg_b.force.y = final_matrix.flatten()[0]
-        # print(msg_l.force.y, msg_r.force.y, msg_b.force.y)
-        # print(self.pose)
         return (msg_l, msg_r, msg_b)
 
     def force_limiter(self, final_matrix, MAX_F = 50.0):
@@ -223,8 +215,16 @@ class HBController(Node):
 
         if (tf <= 25.0):
             return 1
-        # self.get_logger().warn(">>LIMITER<<")
         return (tf / MAX_F)
+    
+    def force_leveler(self, final_matrix, desired_force = 45.0):
+        lf = abs(final_matrix.flatten()[1])
+        rf = abs(final_matrix.flatten()[2])
+        bf = abs(final_matrix.flatten()[0])
+
+        tf = math.sqrt(pow(lf, 2) + pow(rf, 2) + pow(bf, 2))
+
+        return (desired_force / tf)
 
 
 def main(args=None):
@@ -236,49 +236,45 @@ def main(args=None):
     hb_controller_3 = HBController("3")
 
     bot_arr = [hb_controller_1, hb_controller_2, hb_controller_3]
-   
-    # Send an initial request with the index from hb_controller_1.index
-    # hb_controller_1.send_request(hb_controller_1.index)
-    # hb_controller_2.send_request(hb_controller_2.index)
-    # hb_controller_3.send_request(hb_controller_2.index)
+    bot_is_done = [0, 0, 0]
+    flag = True
+
+    for i_ in range(len(bot_arr)):
+        bot_arr[i_].start_move()
     
     # Main loop
-    while rclpy.ok():
+    while rclpy.ok() and flag:
 
-        # Check if the service call is done
+        # Scan and control all the bots
         for i in range(len(bot_arr)):
-            # if bot_arr[i].future.done():
-            #     try:
-            #         # response from the service call
-            #         response = bot_arr[i].future.result()
-            #     except Exception as e:
-            #         hb_controller_1.get_logger().infselfo(
-            #             'Service call failed %r' % (e,))
-            #     else:
-                    # #########           GOAL POSE             #########
+            # #########           GOAL POSE             #########
             x_goal      = bot_arr[i].goal_arrays_x[bot_arr[i].index]
             y_goal      = bot_arr[i].goal_arrays_y[bot_arr[i].index]
             theta_goal  = bot_arr[i].goal_arrays_w
-                    # ####################################################
-            # time.sleep(0.01)
+            # ####################################################
+            
+            bot_arr[i].goal_array = [x_goal/30.0 - 8, y_goal/30.0 - 8, theta_goal]
 
-            bot_arr[i].goal_array = [x_goal/25.0 - 9, y_goal/25.0 - 9 , theta_goal]
-            # print(bot_arr[i].goal_array)
-            bot_arr[i].start_move()
-            # print(bot_arr[i].goal_array)
-            # print(x_goal)
-                    # bot_arr[i].start_move()
-                    # while not bot_arr[i].is_at_goal(0.2, 0.2):
-                    #     rclpy.spin_once(bot_arr[i])
-                    # bot_arr[i].stop_move()
+            ####################################################
 
-            if bot_arr[i].is_at_goal(0.25, 0.25):
-                # bot_arr[i].stop_move()
+            if bot_arr[i].is_at_goal(0.3, 0.1):
                 bot_arr[i].index += 1
                 if bot_arr[i].index == len(bot_arr[i].goal_arrays_x) :
+                    bot_is_done[i] = 1
                     bot_arr[i].index = 0
-                    # bot_arr[i].send_request(bot_arr[i].index)
-                    ####################################################
+
+                    # Once all the bot has looped, end the while loop
+                    # for k in bot_is_done:
+                    #     if k == 0:
+                    #         break
+                    # else:
+                    #     flag = False                   
+
+            ####################################################
+
+            # if bot_is_done[i] == 1:
+            #     bot_arr[i].stop_move()
+                # print(f"Done -> {i}")
 
             # Spin once to process callbacks
             rclpy.spin_once(bot_arr[i])
@@ -292,37 +288,3 @@ def main(args=None):
 # Entry point of the script
 if __name__ == '__main__':
     main()
-
-
-"""
-
-        if bot_arr[i].future.done():
-            try:
-                # response from the service call
-                response = bot_arr[i].future.result()
-            except Exception as e:
-                hb_controller_1.get_logger().infselfo(
-                    'Service call failed %r' % (e,))
-            else:
-                #########           GOAL POSE             #########
-                x_goal      = response.x_goal
-                y_goal      = response.y_goal
-                theta_goal  = response.theta_goal
-                bot_arr[i].flag = response.end_of_list
-                ####################################################
-                
-                bot_arr[i].goal_array = [x_goal/10, y_goal/10, theta_goal]
-
-                bot_arr[i].start_move()
-                while not bot_arr[i].is_at_goal(0.2, 0.2):
-                    rclpy.spin_once(bot_arr[i])
-                bot_arr[i].stop_move()
-
-                ############     DO NOT MODIFY THIS       #########
-                bot_arr[i].index += 1
-                if bot_arr[i].flag == 1 :
-                    bot_arr[i].index = 0
-                bot_arr[i].send_request(bot_arr[i].index)
-                ####################################################
-
-"""

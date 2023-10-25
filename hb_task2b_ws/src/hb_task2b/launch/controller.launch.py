@@ -14,5 +14,9 @@ def generate_launch_description():
         Node(
             package='hb_task2b',
             executable='controller',
+        ),
+        Node(
+            package='hb_task2b',
+            executable='feedback',
         )
     ])

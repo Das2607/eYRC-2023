@@ -19,7 +19,7 @@
 
 
 # Team ID:		[ 2865 ]
-# Author List:		[ Names of team members worked on this file separated by Comma: Name1, Name2, ... ]
+# Author List:	[Shreyas Das]
 # Filename:		controller.py
 # Functions:
 #			[ Comma separated list of functions in this file ]
@@ -55,11 +55,6 @@ class HBController(Node):
         super().__init__('hb_controller')
         
         # Initialze Publisher and Subscriber
-        # NOTE: You are strictly NOT-ALLOWED to use "cmd_vel" or "odom" topics in this task
-	    #	Use the below given topics to generate motion for the robot.
-	    #   /hb_bot_1/left_wheel_force,
-	    #   /hb_bot_1/right_wheel_force,
-	    #   /hb_bot_1/rear_wheel_force
         self.left_wheel = self.create_publisher(Wrench, "/hb_bot_1/left_wheel_force", 10)
         self.right_wheel = self.create_publisher(Wrench, "/hb_bot_1/right_wheel_force", 10)
         self.rear_wheel = self.create_publisher(Wrench, "/hb_bot_1/rear_wheel_force", 10)
@@ -103,22 +98,23 @@ class HBController(Node):
         self.pose = [pose.position.x, pose.position.y, pose.orientation.z]
         self.pose_detected = True
     
+    # Enable controller when Pose is detected
     def start_move(self):
         self.get_logger().info("MOVING")
         self.controller_enable = True and self.pose_detected
-        # print(self.controller_enable)
     
     # Method to create a request to the "next_goal" service
     def send_request(self, request_goal):
         self.req.request_goal = request_goal
         self.future = self.cli.call_async(self.req)
 
-        
+    # Move and publish info to wheels
     def move(self):
         self.iter += 1
         if (self.controller_enable == False):
             if (self.iter % 100 == 0):
                 self.get_logger().info(f"controller: {self.controller_enable} pose: {self.pose_detected}")
+                self.iter = 0
             self.stop_move()
             return
         msg = self.inverse_kinematics()
@@ -126,6 +122,8 @@ class HBController(Node):
         self.right_wheel.publish(msg[1])
         self.rear_wheel.publish(msg[2])
 
+
+    # Calc error
     def error_vx(self):
         return float(self.goal_array[0] - self.pose[0])
     
@@ -155,18 +153,10 @@ class HBController(Node):
         ew_z = self.error_wz()
 
         is_true_if = (abs(ev_x) < tol) and (abs(ev_y) < tol) and (abs(ew_z) < r_tol)
-
         return is_true_if
 
 
-    def inverse_kinematics(self, kp = 1):
-        ############ ADD YOUR CODE HERE ############
-
-        # INSTRUCTIONS & HELP : 
-        #	-> Use the target velocity you calculated for the robot in previous task, and
-        #	Process it further to find what proportions of that effort should be given to 3 individuals wheels !!
-        #	Publish the calculated efforts to actuate robot by applying force vectors on provided topics
-        ############################################
+    def inverse_kinematics(self, kp = 25):
         
         # Rotation Matrix to transform area coords to bot coords
         rot_matrix = np.array([
@@ -198,8 +188,6 @@ class HBController(Node):
         msg_l.force.y = final_matrix.flatten()[1]
         msg_r.force.y = final_matrix.flatten()[2]
         msg_b.force.y = final_matrix.flatten()[0]
-        # print(msg_l.force.y, msg_r.force.y, msg_b.force.y)
-        # print(self.pose)
         return (msg_l, msg_r, msg_b)
 
     def force_limiter(self, final_matrix, MAX_F=50.0):
@@ -208,9 +196,9 @@ class HBController(Node):
         bf = abs(final_matrix.flatten()[0])
 
         tf = max(lf, rf, bf)
-        # print(tf / MAX_F)
-        
-        return (tf / MAX_F)
+        if (tf > MAX_F):        
+            return (tf / MAX_F)
+        return 1
 
 
 def main(args=None):
@@ -242,20 +230,12 @@ def main(args=None):
                 ####################################################
                 
                 hb_controller.goal_array = [x_goal/10, y_goal/10, theta_goal]
-                # hb_controller.goal_array = [5, 4, 0]
-                # print(">>>>"+f"{hb_controller.goal_array}")
+                print(">>>>"+f"{hb_controller.goal_array}")
 
                 hb_controller.start_move()
-                while not hb_controller.is_at_goal(0.2, 0.2):
+                while not hb_controller.is_at_goal(0.3, 0.2):
                     rclpy.spin_once(hb_controller)
                 hb_controller.stop_move()
-
-                # Sleep for 1 sec
-                # for i in range(15):
-                #     time.sleep(0.1)
-                #     hb_controller.get_logger().info(
-                #         f"STAB {(i*100)//14}% {hb_controller.flag}"
-                #     )
                         
                 ############     DO NOT MODIFY THIS       #########
                 hb_controller.index += 1
